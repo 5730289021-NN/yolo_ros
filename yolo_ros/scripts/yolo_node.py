@@ -1,3 +1,5 @@
+#\!/usr/bin/env python3
+
 # Copyright (C) 2023 Miguel Ángel González Santamarta
 
 # This program is free software: you can redistribute it and/or modify
@@ -16,7 +18,6 @@
 
 import cv2
 import rospy
-import os
 from typing import List, Dict
 from cv_bridge import CvBridge
 
@@ -26,6 +27,7 @@ from ultralytics.engine.results import Results
 from ultralytics.engine.results import Boxes
 from ultralytics.engine.results import Masks
 from ultralytics.engine.results import Keypoints
+import os
 
 from std_srvs.srv import SetBool, SetBoolResponse
 from sensor_msgs.msg import Image

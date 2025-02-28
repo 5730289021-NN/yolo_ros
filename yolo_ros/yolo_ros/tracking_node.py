@@ -14,14 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-import rclpy
-from rclpy.qos import QoSProfile
-from rclpy.qos import QoSHistoryPolicy
-from rclpy.qos import QoSDurabilityPolicy
-from rclpy.qos import QoSReliabilityPolicy
-from rclpy.lifecycle import LifecycleNode
-from rclpy.lifecycle import TransitionCallbackReturn
-from rclpy.lifecycle import LifecycleState
+import rospy
 
 import cv2
 import numpy as np
@@ -39,91 +32,61 @@ from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 
 
-class TrackingNode(LifecycleNode):
+class TrackingNode:
 
     def __init__(self) -> None:
-        super().__init__("tracking_node")
+        rospy.init_node("tracking_node")
 
         # params
-        self.declare_parameter("tracker", "bytetrack.yaml")
-        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
+        self.tracker_name = rospy.get_param("~tracker", "bytetrack.yaml")
 
         self.cv_bridge = CvBridge()
 
-    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Configuring...")
+    def configure(self):
+        rospy.loginfo("Configuring...")
 
-        tracker_name = self.get_parameter("tracker").get_parameter_value().string_value
+        self.tracker = self.create_tracker(self.tracker_name)
+        self._pub = rospy.Publisher("tracking", DetectionArray, queue_size=10)
 
-        self.image_reliability = (
-            self.get_parameter("image_reliability").get_parameter_value().integer_value
-        )
+        rospy.loginfo("Configured")
 
-        self.tracker = self.create_tracker(tracker_name)
-        self._pub = self.create_publisher(DetectionArray, "tracking", 10)
-
-        super().on_configure(state)
-        self.get_logger().info(f"[{self.get_name()}] Configured")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Activating...")
-
-        image_qos_profile = QoSProfile(
-            reliability=self.image_reliability,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1,
-        )
+    def activate(self):
+        rospy.loginfo("Activating...")
 
         # subs
-        image_sub = message_filters.Subscriber(
-            self, Image, "image_raw", qos_profile=image_qos_profile
-        )
-        detections_sub = message_filters.Subscriber(
-            self, DetectionArray, "detections", qos_profile=10
-        )
+        self.image_sub = message_filters.Subscriber("image_raw", Image)
+        self.detections_sub = message_filters.Subscriber("detections", DetectionArray)
 
         self._synchronizer = message_filters.ApproximateTimeSynchronizer(
-            (image_sub, detections_sub), 10, 0.5
+            (self.image_sub, self.detections_sub), 10, 0.5
         )
         self._synchronizer.registerCallback(self.detections_cb)
 
-        super().on_activate(state)
-        self.get_logger().info(f"[{self.get_name()}] Activated")
+        rospy.loginfo("Activated")
 
-        return TransitionCallbackReturn.SUCCESS
+    def deactivate(self):
+        rospy.loginfo("Deactivating...")
 
-    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Deactivating...")
-
-        self.destroy_subscription(self.image_sub.sub)
-        self.destroy_subscription(self.detections_sub.sub)
+        self.image_sub.unregister()
+        self.detections_sub.unregister()
 
         del self._synchronizer
         self._synchronizer = None
 
-        super().on_deactivate(state)
-        self.get_logger().info(f"[{self.get_name()}] Deactivated")
+        rospy.loginfo("Deactivated")
 
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Cleaning up...")
+    def cleanup(self):
+        rospy.loginfo("Cleaning up...")
 
         del self.tracker
+        self._pub.unregister()
 
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Cleaned up")
+        rospy.loginfo("Cleaned up")
 
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Shutting down...")
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Shutted down")
-        return TransitionCallbackReturn.SUCCESS
+    def shutdown(self):
+        rospy.loginfo("Shutting down...")
+        self.cleanup()
+        rospy.loginfo("Shutted down")
 
     def create_tracker(self, tracker_yaml: str) -> BaseTrack:
 
@@ -199,10 +162,10 @@ class TrackingNode(LifecycleNode):
 
 
 def main():
-    rclpy.init()
-    node = TrackingNode()
-    node.trigger_configure()
-    node.trigger_activate()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node = TrackingNode()
+        node.configure()
+        node.activate()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass

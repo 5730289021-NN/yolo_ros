@@ -19,16 +19,7 @@ import random
 import numpy as np
 from typing import Tuple
 
-import rclpy
-from rclpy.duration import Duration
-from rclpy.qos import QoSProfile
-from rclpy.qos import QoSHistoryPolicy
-from rclpy.qos import QoSDurabilityPolicy
-from rclpy.qos import QoSReliabilityPolicy
-from rclpy.lifecycle import LifecycleNode
-from rclpy.lifecycle import TransitionCallbackReturn
-from rclpy.lifecycle import LifecycleState
-
+import rospy
 import message_filters
 from cv_bridge import CvBridge
 from ultralytics.utils.plotting import Annotator, colors
@@ -43,90 +34,28 @@ from yolo_msgs.msg import Detection
 from yolo_msgs.msg import DetectionArray
 
 
-class DebugNode(LifecycleNode):
+class DebugNode:
 
-    def __init__(self) -> None:
-        super().__init__("debug_node")
-
+    def __init__(self):
+        rospy.init_node("debug_node")
         self._class_to_color = {}
         self.cv_bridge = CvBridge()
 
-        # params
-        self.declare_parameter("image_reliability", QoSReliabilityPolicy.BEST_EFFORT)
-
-    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Configuring...")
-
-        self.image_qos_profile = QoSProfile(
-            reliability=self.get_parameter("image_reliability")
-            .get_parameter_value()
-            .integer_value,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1,
-        )
-
         # pubs
-        self._dbg_pub = self.create_publisher(Image, "dbg_image", 10)
-        self._bb_markers_pub = self.create_publisher(MarkerArray, "dgb_bb_markers", 10)
-        self._kp_markers_pub = self.create_publisher(MarkerArray, "dgb_kp_markers", 10)
-
-        super().on_configure(state)
-        self.get_logger().info(f"[{self.get_name()}] Configured")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Activating...")
+        self._dbg_pub = rospy.Publisher("dbg_image", Image, queue_size=10)
+        self._bb_markers_pub = rospy.Publisher("dgb_bb_markers", MarkerArray, queue_size=10)
+        self._kp_markers_pub = rospy.Publisher("dgb_kp_markers", MarkerArray, queue_size=10)
 
         # subs
-        self.image_sub = message_filters.Subscriber(
-            self, Image, "image_raw", qos_profile=self.image_qos_profile
-        )
-        self.detections_sub = message_filters.Subscriber(
-            self, DetectionArray, "detections", qos_profile=10
-        )
+        self.image_sub = message_filters.Subscriber("image_raw", Image)
+        self.detections_sub = message_filters.Subscriber("detections", DetectionArray)
 
         self._synchronizer = message_filters.ApproximateTimeSynchronizer(
             (self.image_sub, self.detections_sub), 10, 0.5
         )
         self._synchronizer.registerCallback(self.detections_cb)
 
-        super().on_activate(state)
-        self.get_logger().info(f"[{self.get_name()}] Activated")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Deactivating...")
-
-        self.destroy_subscription(self.image_sub.sub)
-        self.destroy_subscription(self.detections_sub.sub)
-
-        del self._synchronizer
-
-        super().on_deactivate(state)
-        self.get_logger().info(f"[{self.get_name()}] Deactivated")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Cleaning up...")
-
-        self.destroy_publisher(self._dbg_pub)
-        self.destroy_publisher(self._bb_markers_pub)
-        self.destroy_publisher(self._kp_markers_pub)
-
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Cleaned up")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Shutting down...")
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Shutted down")
-        return TransitionCallbackReturn.SUCCESS
+        rospy.loginfo("Debug node initialized")
 
     def draw_box(
         self,
@@ -294,7 +223,8 @@ class DebugNode(LifecycleNode):
         marker.color.b = color[2] / 255.0
         marker.color.a = 0.4
 
-        marker.lifetime = Duration(seconds=0.5).to_msg()
+        marker.lifetime.secs = 0
+        marker.lifetime.nsecs = 500000000  # 0.5 seconds
         marker.text = detection.class_name
 
         return marker
@@ -325,7 +255,8 @@ class DebugNode(LifecycleNode):
         marker.color.b = keypoint.score * 255.0
         marker.color.a = 0.4
 
-        marker.lifetime = Duration(seconds=0.5).to_msg()
+        marker.lifetime.secs = 0
+        marker.lifetime.nsecs = 500000000  # 0.5 seconds
         marker.text = str(keypoint.id)
 
         return marker
@@ -374,10 +305,12 @@ class DebugNode(LifecycleNode):
 
 
 def main():
-    rclpy.init()
-    node = DebugNode()
-    node.trigger_configure()
-    node.trigger_activate()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node = DebugNode()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass
+
+
+if __name__ == "__main__":
+    main()

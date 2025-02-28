@@ -18,14 +18,7 @@ import cv2
 import numpy as np
 from typing import List, Tuple
 
-import rclpy
-from rclpy.qos import QoSProfile
-from rclpy.qos import QoSHistoryPolicy
-from rclpy.qos import QoSDurabilityPolicy
-from rclpy.qos import QoSReliabilityPolicy
-from rclpy.lifecycle import LifecycleNode
-from rclpy.lifecycle import TransitionCallbackReturn
-from rclpy.lifecycle import LifecycleState
+import rospy
 
 import message_filters
 from cv_bridge import CvBridge
@@ -42,128 +35,67 @@ from yolo_msgs.msg import KeyPoint3DArray
 from yolo_msgs.msg import BoundingBox3D
 
 
-class Detect3DNode(LifecycleNode):
+class Detect3DNode:
 
     def __init__(self) -> None:
-        super().__init__("bbox3d_node")
+        rospy.init_node("bbox3d_node")
 
         # parameters
-        self.declare_parameter("target_frame", "base_link")
-        self.declare_parameter("maximum_detection_threshold", 0.3)
-        self.declare_parameter("depth_image_units_divisor", 1000)
-        self.declare_parameter(
-            "depth_image_reliability", QoSReliabilityPolicy.BEST_EFFORT
-        )
-        self.declare_parameter("depth_info_reliability", QoSReliabilityPolicy.BEST_EFFORT)
+        self.target_frame = rospy.get_param("~target_frame", "base_link")
+        self.maximum_detection_threshold = rospy.get_param("~maximum_detection_threshold", 0.3)
+        self.depth_image_units_divisor = rospy.get_param("~depth_image_units_divisor", 1000)
 
         # aux
         self.tf_buffer = Buffer()
         self.cv_bridge = CvBridge()
 
-    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Configuring...")
-
-        self.target_frame = (
-            self.get_parameter("target_frame").get_parameter_value().string_value
-        )
-        self.maximum_detection_threshold = (
-            self.get_parameter("maximum_detection_threshold")
-            .get_parameter_value()
-            .double_value
-        )
-        self.depth_image_units_divisor = (
-            self.get_parameter("depth_image_units_divisor")
-            .get_parameter_value()
-            .integer_value
-        )
-        dimg_reliability = (
-            self.get_parameter("depth_image_reliability")
-            .get_parameter_value()
-            .integer_value
-        )
-
-        self.depth_image_qos_profile = QoSProfile(
-            reliability=dimg_reliability,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1,
-        )
-
-        dinfo_reliability = (
-            self.get_parameter("depth_info_reliability")
-            .get_parameter_value()
-            .integer_value
-        )
-
-        self.depth_info_qos_profile = QoSProfile(
-            reliability=dinfo_reliability,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            durability=QoSDurabilityPolicy.VOLATILE,
-            depth=1,
-        )
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+    def configure(self):
+        rospy.loginfo("Configuring...")
+        self.tf_listener = TransformListener(self.tf_buffer)
 
         # pubs
-        self._pub = self.create_publisher(DetectionArray, "detections_3d", 10)
+        self._pub = rospy.Publisher("detections_3d", DetectionArray, queue_size=10)
 
-        super().on_configure(state)
-        self.get_logger().info(f"[{self.get_name()}] Configured")
+        rospy.loginfo("Configured")
 
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Activating...")
+    def activate(self):
+        rospy.loginfo("Activating...")
 
         # subs
-        self.depth_sub = message_filters.Subscriber(
-            self, Image, "depth_image", qos_profile=self.depth_image_qos_profile
-        )
-        self.depth_info_sub = message_filters.Subscriber(
-            self, CameraInfo, "depth_info", qos_profile=self.depth_info_qos_profile
-        )
-        self.detections_sub = message_filters.Subscriber(
-            self, DetectionArray, "detections"
-        )
+        self.depth_sub = message_filters.Subscriber("depth_image", Image)
+        self.depth_info_sub = message_filters.Subscriber("depth_info", CameraInfo)
+        self.detections_sub = message_filters.Subscriber("detections", DetectionArray)
 
         self._synchronizer = message_filters.ApproximateTimeSynchronizer(
             (self.depth_sub, self.depth_info_sub, self.detections_sub), 10, 0.5
         )
         self._synchronizer.registerCallback(self.on_detections)
 
-        super().on_activate(state)
-        self.get_logger().info(f"[{self.get_name()}] Activated")
+        rospy.loginfo("Activated")
 
-        return TransitionCallbackReturn.SUCCESS
+    def deactivate(self):
+        rospy.loginfo("Deactivating...")
 
-    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Deactivating...")
-
-        self.destroy_subscription(self.depth_sub.sub)
-        self.destroy_subscription(self.depth_info_sub.sub)
-        self.destroy_subscription(self.detections_sub.sub)
+        self.depth_sub.unregister()
+        self.depth_info_sub.unregister()
+        self.detections_sub.unregister()
 
         del self._synchronizer
 
-        super().on_deactivate(state)
-        self.get_logger().info(f"[{self.get_name()}] Deactivated")
+        rospy.loginfo("Deactivated")
 
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Cleaning up...")
+    def cleanup(self):
+        rospy.loginfo("Cleaning up...")
 
         del self.tf_listener
+        self._pub.unregister()
 
-        self.destroy_publisher(self._pub)
+        rospy.loginfo("Cleaned up")
 
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Cleaned up")
-
-    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.get_logger().info(f"[{self.get_name()}] Shutting down...")
-        super().on_cleanup(state)
-        self.get_logger().info(f"[{self.get_name()}] Shutted down")
-        return TransitionCallbackReturn.SUCCESS
+    def shutdown(self):
+        rospy.loginfo("Shutting down...")
+        self.cleanup()
+        rospy.loginfo("Shutted down")
 
     def on_detections(
         self,
@@ -342,7 +274,7 @@ class Detect3DNode(LifecycleNode):
 
         try:
             transform: TransformStamped = self.tf_buffer.lookup_transform(
-                self.target_frame, frame_id, rclpy.time.Time()
+                self.target_frame, frame_id, rospy.Time(0)
             )
 
             translation = np.array(
@@ -437,10 +369,10 @@ class Detect3DNode(LifecycleNode):
 
 
 def main():
-    rclpy.init()
-    node = Detect3DNode()
-    node.trigger_configure()
-    node.trigger_activate()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node = Detect3DNode()
+        node.configure()
+        node.activate()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass

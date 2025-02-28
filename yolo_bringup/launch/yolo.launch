@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- YOLO model parameters -->
+  <arg name="model_type" default="YOLO" doc="Model type (YOLO or World)"/>
+  <arg name="model" default="yolov8m.pt" doc="Model name or path"/>
+  <arg name="tracker" default="bytetrack.yaml" doc="Tracker name or path"/>
+  <arg name="device" default="cuda:0" doc="Device to use (GPU/CPU)"/>
+  <arg name="openvino" default="false" doc="Whether to use OpenVINO for inference (CPU only)"/>
+  <arg name="enable" default="true" doc="Whether to start YOLO enabled"/>
+  <arg name="threshold" default="0.5" doc="Minimum probability of a detection to be published"/>
+  <arg name="iou" default="0.7" doc="IoU threshold"/>
+  <arg name="imgsz_height" default="480" doc="Image height for inference"/>
+  <arg name="imgsz_width" default="640" doc="Image width for inference"/>
+  <arg name="half" default="false" doc="Whether to enable half-precision inference"/>
+  <arg name="max_det" default="300" doc="Maximum number of detections allowed per image"/>
+  <arg name="augment" default="false" doc="Whether to enable test-time augmentation"/>
+  <arg name="agnostic_nms" default="false" doc="Whether to enable class-agnostic NMS"/>
+  <arg name="retina_masks" default="false" doc="Whether to use high-resolution segmentation masks"/>
+  
+  <!-- Topic parameters -->
+  <arg name="input_image_topic" default="/camera/rgb/image_raw" doc="Name of the input image topic"/>
+  <arg name="input_depth_topic" default="/camera/depth/image_raw" doc="Name of the input depth topic"/>
+  <arg name="input_depth_info_topic" default="/camera/depth/camera_info" doc="Name of the input depth info topic"/>
+  <arg name="target_frame" default="base_link" doc="Target frame to transform the 3D boxes"/>
+  <arg name="depth_image_units_divisor" default="1000" doc="Divisor used to convert the raw depth image values into metres"/>
+  <arg name="maximum_detection_threshold" default="0.3" doc="Maximum detection threshold in the z axis"/>
+  
+  <!-- Other parameters -->
+  <arg name="namespace" default="yolo" doc="Namespace for the nodes"/>
+  <arg name="use_debug" default="true" doc="Whether to activate the debug node"/>
+  <arg name="use_tracking" default="true" doc="Whether to activate tracking"/>
+  <arg name="use_3d" default="true" doc="Whether to activate 3D detections"/>
+  
+  <!-- Launch the YOLO node -->
+  <node pkg="yolo_ros" type="yolo_node.py" name="yolo_node" ns="$(arg namespace)" output="screen">
+    <param name="model_type" value="$(arg model_type)"/>
+    <param name="model" value="$(arg model)"/>
+    <param name="device" value="$(arg device)"/>
+    <param name="openvino" value="$(arg openvino)"/>
+    <param name="enable" value="$(arg enable)"/>
+    <param name="threshold" value="$(arg threshold)"/>
+    <param name="iou" value="$(arg iou)"/>
+    <param name="imgsz_height" value="$(arg imgsz_height)"/>
+    <param name="imgsz_width" value="$(arg imgsz_width)"/>
+    <param name="half" value="$(arg half)"/>
+    <param name="max_det" value="$(arg max_det)"/>
+    <param name="augment" value="$(arg augment)"/>
+    <param name="agnostic_nms" value="$(arg agnostic_nms)"/>
+    <param name="retina_masks" value="$(arg retina_masks)"/>
+    <remap from="image_raw" to="$(arg input_image_topic)"/>
+  </node>
+
+  <!-- Launch the Tracking node if enabled -->
+  <group if="$(arg use_tracking)">
+    <node pkg="yolo_ros" type="tracking_node.py" name="tracking_node" ns="$(arg namespace)" output="screen">
+      <param name="tracker" value="$(arg tracker)"/>
+      <remap from="image_raw" to="$(arg input_image_topic)"/>
+    </node>
+  </group>
+
+  <!-- Launch the 3D detection node if enabled -->
+  <group if="$(arg use_3d)">
+    <node pkg="yolo_ros" type="detect_3d_node.py" name="detect_3d_node" ns="$(arg namespace)" output="screen">
+      <param name="target_frame" value="$(arg target_frame)"/>
+      <param name="maximum_detection_threshold" value="$(arg maximum_detection_threshold)"/>
+      <param name="depth_image_units_divisor" value="$(arg depth_image_units_divisor)"/>
+      <remap from="depth_image" to="$(arg input_depth_topic)"/>
+      <remap from="depth_info" to="$(arg input_depth_info_topic)"/>
+      <remap from="detections" to="$(arg use_tracking)">
+        <group unless="$(arg use_tracking)">
+          <remap from="detections" to="detections"/>
+        </group>
+        <group if="$(arg use_tracking)">
+          <remap from="detections" to="tracking"/>
+        </group>
+      </remap>
+    </node>
+  </group>
+
+  <!-- Launch the debug node if enabled -->
+  <group if="$(arg use_debug)">
+    <node pkg="yolo_ros" type="debug_node.py" name="debug_node" ns="$(arg namespace)" output="screen">
+      <remap from="image_raw" to="$(arg input_image_topic)"/>
+      <remap from="detections" to="$(arg use_tracking)">
+        <group unless="$(arg use_tracking)">
+          <group unless="$(arg use_3d)">
+            <remap from="detections" to="detections"/>
+          </group>
+          <group if="$(arg use_3d)">
+            <remap from="detections" to="detections_3d"/>
+          </group>
+        </group>
+        <group if="$(arg use_tracking)">
+          <group unless="$(arg use_3d)">
+            <remap from="detections" to="tracking"/>
+          </group>
+          <group if="$(arg use_3d)">
+            <remap from="detections" to="detections_3d"/>
+          </group>
+        </group>
+      </remap>
+    </node>
+  </group>
+</launch>
